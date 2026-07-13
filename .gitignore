@@ -1,0 +1,5 @@
+.reference/
+out/
+data/*.csv
+!data/.gitkeep
+

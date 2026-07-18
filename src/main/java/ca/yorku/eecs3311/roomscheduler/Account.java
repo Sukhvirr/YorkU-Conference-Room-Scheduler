@@ -12,16 +12,21 @@ public abstract class Account {
     private final String email;
     private String passwordHash;
     private final Role role;
+    private final UserType userType;
+    private final String organizationId;
     private boolean universityVerified;
     private boolean active;
 
     protected Account(String id, String name, String email, String passwordHash, Role role,
+                      UserType userType, String organizationId,
                       boolean universityVerified, boolean active) {
         this.id = require(id, "Account ID");
         this.name = require(name, "Name");
         this.email = require(email, "Email").toLowerCase();
         this.passwordHash = require(passwordHash, "Password");
         this.role = Objects.requireNonNull(role);
+        this.userType = userType;
+        this.organizationId = organizationId == null ? "" : organizationId.trim();
         this.universityVerified = universityVerified;
         this.active = active;
     }
@@ -32,9 +37,19 @@ public abstract class Account {
     }
 
     public static String hashPassword(String password) {
-        if (password == null || password.length() < 6) {
-            throw new IllegalArgumentException("Password must contain at least 6 characters.");
+        if (password == null || password.length() < 8
+                || !password.matches(".*[A-Z].*")
+                || !password.matches(".*[a-z].*")
+                || !password.matches(".*\\d.*")
+                || !password.matches(".*[^A-Za-z0-9].*")) {
+            throw new IllegalArgumentException(
+                    "Password must be 8+ characters and include uppercase, lowercase, a number, and a symbol.");
         }
+        return digestPassword(password);
+    }
+
+    private static String digestPassword(String password) {
+        if (password == null) return "";
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(password.getBytes(StandardCharsets.UTF_8)));
@@ -44,7 +59,7 @@ public abstract class Account {
     }
 
     public boolean passwordMatches(String password) {
-        return hashPassword(password).equals(passwordHash);
+        return digestPassword(password).equals(passwordHash);
     }
 
     public String id() { return id; }
@@ -52,6 +67,12 @@ public abstract class Account {
     public String email() { return email; }
     public String passwordHash() { return passwordHash; }
     public Role role() { return role; }
+    public UserType userType() { return userType; }
+    public String organizationId() { return organizationId; }
+    public java.math.BigDecimal hourlyRate() {
+        if (userType == null) throw new IllegalStateException("Administrator accounts do not have a booking rate.");
+        return userType.hourlyRate();
+    }
     public boolean universityVerified() { return universityVerified; }
     public boolean active() { return active; }
     public void setName(String name) { this.name = require(name, "Name"); }
@@ -61,4 +82,3 @@ public abstract class Account {
 
     @Override public String toString() { return name + " (" + role.displayName() + ")"; }
 }
-

@@ -61,7 +61,7 @@ public final class MainFrame extends JFrame {
         tabs.addTab("Log in", loginPanel());
         tabs.addTab("Create account", registrationPanel());
         page.add(tabs, BorderLayout.CENTER);
-        JLabel demos = new JLabel("Demo logins: student@yorku.ca / student123   |   admin@yorku.ca / admin123   |   chief@yorku.ca / chief123",
+        JLabel demos = new JLabel("Demo logins: student@yorku.ca / Student123!   |   admin@yorku.ca / Admin123!   |   chief@yorku.ca / Chief123!",
                 SwingConstants.CENTER);
         page.add(demos, BorderLayout.SOUTH);
         root.add(page, "auth");
@@ -73,7 +73,7 @@ public final class MainFrame extends JFrame {
     private JPanel loginPanel() {
         JPanel panel = formPanel();
         JTextField email = new JTextField("student@yorku.ca", 25);
-        JPasswordField password = new JPasswordField("student123", 25);
+        JPasswordField password = new JPasswordField("Student123!", 25);
         addFormRow(panel, 0, "Email", email);
         addFormRow(panel, 1, "Password", password);
         JButton login = new JButton("Log in");
@@ -91,18 +91,23 @@ public final class MainFrame extends JFrame {
         JTextField name = new JTextField(25);
         JTextField email = new JTextField(25);
         JPasswordField password = new JPasswordField(25);
-        JCheckBox university = new JCheckBox("Verify as a York University account (@yorku.ca)");
+        JComboBox<UserType> userType = new JComboBox<>(UserType.values());
+        JTextField organizationId = new JTextField(25);
         addFormRow(panel, 0, "Full name", name);
         addFormRow(panel, 1, "Email", email);
-        addFormRow(panel, 2, "Password (6+ characters)", password);
-        GridBagConstraints uc = constraints(3); uc.gridx = 1; uc.anchor = GridBagConstraints.WEST;
-        panel.add(university, uc);
+        addFormRow(panel, 2, "Account type", userType);
+        addFormRow(panel, 3, "Student / organization ID", organizationId);
+        addFormRow(panel, 4, "Strong password", password);
+        JLabel passwordHelp = new JLabel("8+ characters with uppercase, lowercase, number, and symbol");
+        GridBagConstraints uc = constraints(5); uc.gridx = 1; uc.anchor = GridBagConstraints.WEST;
+        panel.add(passwordHelp, uc);
         JButton register = new JButton("Create account");
-        GridBagConstraints bc = constraints(4); bc.gridx = 1; bc.anchor = GridBagConstraints.WEST;
+        GridBagConstraints bc = constraints(6); bc.gridx = 1; bc.anchor = GridBagConstraints.WEST;
         panel.add(register, bc);
         register.addActionListener(e -> runAction(() -> {
             currentAccount = scheduler.register(name.getText(), email.getText(),
-                    new String(password.getPassword()), university.isSelected());
+                    new String(password.getPassword()), (UserType) userType.getSelectedItem(),
+                    organizationId.getText());
             showDashboard();
         }));
         return panel;
@@ -122,7 +127,8 @@ public final class MainFrame extends JFrame {
         page.add(header, BorderLayout.NORTH);
 
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("Find & Book Rooms", roomSearchPanel());
+        if (currentAccount.role() == Role.REGISTERED_USER)
+            tabs.addTab("Find & Book Rooms", roomSearchPanel());
         tabs.addTab(currentAccount.role() == Role.REGISTERED_USER ? "My Bookings" : "All Bookings", bookingsPanel());
         tabs.addTab("Notifications", notificationsPanel());
         if (currentAccount.role() != Role.REGISTERED_USER) {
@@ -153,11 +159,11 @@ public final class MainFrame extends JFrame {
         filters.add(location); filters.add(search);
         panel.add(filters, BorderLayout.NORTH);
 
-        DefaultTableModel model = tableModel("Room ID", "Name", "Location", "Capacity", "Status");
+        DefaultTableModel model = tableModel("Room ID", "Name", "Location", "Capacity", "Status", "Your hourly rate");
         JTable table = new JTable(model);
         List<Room> results = new ArrayList<>();
         panel.add(new JScrollPane(table), BorderLayout.CENTER);
-        JButton book = new JButton("Book selected room ($10 deposit)");
+        JButton book = new JButton("Book selected room (one-hour deposit)");
         book.setEnabled(false);
         JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT)); footer.add(book); panel.add(footer, BorderLayout.SOUTH);
 
@@ -166,7 +172,8 @@ public final class MainFrame extends JFrame {
             results.addAll(scheduler.searchRooms(parseDate(start.getText()), parseDate(end.getText()),
                     (Integer) capacity.getValue(), location.getText()));
             model.setRowCount(0);
-            for (Room r : results) model.addRow(new Object[]{r.id(), r.name(), r.location(), r.capacity(), r.status()});
+            for (Room r : results) model.addRow(new Object[]{r.id(), r.name(), r.location(), r.capacity(), r.status(),
+                    "$" + currentAccount.hourlyRate()});
             book.setEnabled(!results.isEmpty());
         });
         search.addActionListener(e -> refresh.run());
@@ -182,14 +189,25 @@ public final class MainFrame extends JFrame {
 
     private void showPaymentDialog(Room room, LocalDateTime start, LocalDateTime end, int attendees, Runnable after) {
         if (start == null || end == null) return;
-        JComboBox<String> method = new JComboBox<>(new String[]{"Credit Card", "Campus Card", "Debit"});
+        JComboBox<String> method = new JComboBox<>(new String[]{"Credit Card", "Debit", "Institutional Billing"});
         JTextField details = new JTextField("4111111111111111", 18);
+        method.addActionListener(e -> {
+            if ("Institutional Billing".equals(method.getSelectedItem())) details.setText(currentAccount.organizationId());
+            else details.setText("4111111111111111");
+        });
         JPanel form = new JPanel(); form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
         form.add(new JLabel("Room: " + room));
         form.add(new JLabel("Time: " + DATE_TIME.format(start) + " to " + DATE_TIME.format(end)));
+        long minutes = java.time.Duration.between(start, end).toMinutes();
+        java.math.BigDecimal total = currentAccount.hourlyRate()
+                .multiply(java.math.BigDecimal.valueOf(minutes))
+                .divide(java.math.BigDecimal.valueOf(60), 2, java.math.RoundingMode.HALF_UP);
+        form.add(new JLabel("Hourly rate: $" + currentAccount.hourlyRate()));
+        form.add(new JLabel("One-hour upfront deposit: $" + currentAccount.hourlyRate()));
+        form.add(new JLabel("Estimated total: $" + total));
         form.add(new JLabel("Payment method")); form.add(method);
-        form.add(new JLabel("Card/account number (demo validation only)")); form.add(details);
-        int answer = JOptionPane.showConfirmDialog(this, form, "Pay $10 deposit and book", JOptionPane.OK_CANCEL_OPTION);
+        form.add(new JLabel("Card number or institutional billing ID")); form.add(details);
+        int answer = JOptionPane.showConfirmDialog(this, form, "Pay one-hour deposit and book", JOptionPane.OK_CANCEL_OPTION);
         if (answer == JOptionPane.OK_OPTION) runAction(() -> {
             Booking booking = scheduler.bookRoom(currentAccount, room.id(), start, end, attendees,
                     (String) method.getSelectedItem(), details.getText());
@@ -201,24 +219,28 @@ public final class MainFrame extends JFrame {
     private JPanel bookingsPanel() {
         JPanel panel = new JPanel(new BorderLayout(8, 8));
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        DefaultTableModel model = tableModel("Booking ID", "User ID", "Room", "Start", "End", "People", "State", "Deposit");
+        DefaultTableModel model = tableModel("Booking ID", "User ID", "Room", "Start", "Expiry", "People",
+                "State", "Rate", "Deposit", "Estimated total");
         JTable table = new JTable(model);
         List<Booking> rows = new ArrayList<>();
         panel.add(new JScrollPane(table), BorderLayout.CENTER);
         JButton refreshButton = new JButton("Refresh");
-        JButton edit = new JButton("Edit / Extend");
+        JButton edit = new JButton("Edit Booking");
+        JButton extend = new JButton("Extend Expiry");
         JButton cancel = new JButton("Cancel");
         JButton checkIn = new JButton("Scan badge / Check in now");
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        actions.add(refreshButton); actions.add(edit); actions.add(cancel); actions.add(checkIn);
+        actions.add(refreshButton); actions.add(edit); actions.add(extend); actions.add(cancel); actions.add(checkIn);
         panel.add(actions, BorderLayout.SOUTH);
         Runnable refresh = () -> {
             rows.clear(); rows.addAll(scheduler.bookingsFor(currentAccount)); model.setRowCount(0);
             for (Booking b : rows) model.addRow(new Object[]{shortId(b.id()), shortId(b.accountId()), b.roomId(),
-                    DATE_TIME.format(b.start()), DATE_TIME.format(b.end()), b.attendees(), b.state().name(), b.depositStatus()});
+                    DATE_TIME.format(b.start()), DATE_TIME.format(b.end()), b.attendees(), b.state().name(),
+                    "$" + b.hourlyRate(), "$" + b.depositAmount() + " " + b.depositStatus(), "$" + b.estimatedTotal()});
         };
         refreshButton.addActionListener(e -> runAction(refresh));
         edit.addActionListener(e -> withSelected(table, rows, booking -> editBookingDialog(booking, refresh)));
+        extend.addActionListener(e -> withSelected(table, rows, booking -> extendBookingDialog(booking, refresh)));
         cancel.addActionListener(e -> withSelected(table, rows, booking -> runAction(() -> {
             scheduler.cancelBooking(currentAccount, booking.id()); refresh.run();
         })));
@@ -238,10 +260,23 @@ public final class MainFrame extends JFrame {
         JPanel form = formPanel();
         addFormRow(form, 0, "Room", room); addFormRow(form, 1, "Start", start);
         addFormRow(form, 2, "End", end); addFormRow(form, 3, "Attendees", people);
-        if (JOptionPane.showConfirmDialog(this, form, "Edit / Extend Booking", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION)
+        if (JOptionPane.showConfirmDialog(this, form, "Edit Booking", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION)
             runAction(() -> {
                 scheduler.editBooking(currentAccount, booking.id(), ((Room) room.getSelectedItem()).id(),
                         parseDate(start.getText()), parseDate(end.getText()), (Integer) people.getValue());
+                refresh.run();
+            });
+    }
+
+    private void extendBookingDialog(Booking booking, Runnable refresh) {
+        JTextField newEnd = new JTextField(DATE_TIME.format(booking.end().plusHours(1)), 17);
+        JPanel form = formPanel();
+        addFormRow(form, 0, "Current expiry", new JLabel(DATE_TIME.format(booking.end())));
+        addFormRow(form, 1, "New expiry", newEnd);
+        if (JOptionPane.showConfirmDialog(this, form, "Extend Booking Before Expiry", JOptionPane.OK_CANCEL_OPTION)
+                == JOptionPane.OK_OPTION)
+            runAction(() -> {
+                scheduler.extendBooking(currentAccount, booking.id(), parseDate(newEnd.getText()));
                 refresh.run();
             });
     }
@@ -347,19 +382,25 @@ public final class MainFrame extends JFrame {
         create.addActionListener(e -> createAdminDialog(refresh));
         toggle.addActionListener(e -> withSelected(table, rows, a -> runAction(() -> { scheduler.setAdministratorActive(currentAccount, a.id(), !a.active()); refresh.run(); })));
         reset.addActionListener(e -> withSelected(table, rows, a -> {
-            String password = JOptionPane.showInputDialog(this, "New password (6+ characters)");
+            String password = JOptionPane.showInputDialog(this,
+                    "New strong password (8+ characters; uppercase, lowercase, number, symbol)");
             if (password != null) runAction(() -> scheduler.resetAdministratorPassword(currentAccount, a.id(), password));
         }));
         refresh.run(); return panel;
     }
 
     private void createAdminDialog(Runnable refresh) {
-        JTextField name = new JTextField(20); JTextField email = new JTextField(20); JPasswordField password = new JPasswordField(20);
-        JPanel form = formPanel(); addFormRow(form, 0, "Name", name); addFormRow(form, 1, "Email", email); addFormRow(form, 2, "Password", password);
+        JTextField name = new JTextField(20);
+        JPanel form = formPanel(); addFormRow(form, 0, "Administrator name", name);
         if (JOptionPane.showConfirmDialog(this, form, "Generate Administrator Account", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION)
             runAction(() -> {
-                Account admin = scheduler.createAdministrator(currentAccount, name.getText(), email.getText(), new String(password.getPassword()));
-                refresh.run(); JOptionPane.showMessageDialog(this, "Administrator created: " + admin.email());
+                GeneratedAdminCredentials credentials = scheduler.generateAdministrator(currentAccount, name.getText());
+                refresh.run();
+                JTextArea result = new JTextArea("Email: " + credentials.account().email()
+                        + "\nTemporary password: " + credentials.temporaryPassword());
+                result.setEditable(false);
+                JOptionPane.showMessageDialog(this, result, "Generated Administrator Credentials",
+                        JOptionPane.INFORMATION_MESSAGE);
             });
     }
 
@@ -392,4 +433,3 @@ public final class MainFrame extends JFrame {
     }
     private void showError(String message) { JOptionPane.showMessageDialog(this, message, "Unable to complete action", JOptionPane.ERROR_MESSAGE); }
 }
-

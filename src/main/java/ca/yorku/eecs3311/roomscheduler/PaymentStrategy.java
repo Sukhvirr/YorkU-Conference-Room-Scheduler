@@ -12,7 +12,7 @@ public interface PaymentStrategy {
     static PaymentStrategy forMethod(String method) {
         return switch (method.toUpperCase(Locale.ROOT)) {
             case "CREDIT CARD" -> new CreditCardPaymentStrategy();
-            case "CAMPUS CARD" -> new CampusCardPaymentStrategy();
+            case "INSTITUTIONAL BILLING" -> new InstitutionalBillingStrategy();
             case "DEBIT" -> new DebitPaymentStrategy();
             default -> throw new IllegalArgumentException("Unsupported payment method: " + method);
         };
@@ -33,11 +33,11 @@ final class CreditCardPaymentStrategy implements PaymentStrategy {
     }
 }
 
-final class CampusCardPaymentStrategy implements PaymentStrategy {
-    public String method() { return "Campus Card"; }
+final class InstitutionalBillingStrategy implements PaymentStrategy {
+    public String method() { return "Institutional Billing"; }
     public PaymentReceipt pay(BigDecimal amount, String details) {
-        if (details == null || !details.trim().matches("\\d{9}"))
-            throw new IllegalArgumentException("Campus card number must contain 9 digits.");
+        if (details == null || !details.trim().matches("[A-Za-z0-9-]{6,20}"))
+            throw new IllegalArgumentException("Enter a valid 6–20 character institutional billing ID.");
         return new PaymentReceipt(UUID.randomUUID().toString(), method(), amount);
     }
 }
@@ -50,4 +50,3 @@ final class DebitPaymentStrategy implements PaymentStrategy {
         return new PaymentReceipt(UUID.randomUUID().toString(), method(), amount);
     }
 }
-

@@ -37,17 +37,25 @@ public final class DatabaseManager {
         List<Account> result = new ArrayList<>();
         for (List<String> row : read("accounts.csv")) {
             if (row.size() < 7 || row.get(0).equals("id")) continue;
+            Role role = Role.valueOf(row.get(4));
+            UserType userType = role == Role.REGISTERED_USER
+                    ? (row.size() > 7 && !row.get(7).isBlank() ? UserType.valueOf(row.get(7)) : UserType.STUDENT)
+                    : null;
+            String organizationId = row.size() > 8 ? row.get(8) : "000000000";
             result.add(AccountFactory.restore(row.get(0), row.get(1), row.get(2), row.get(3),
-                    Role.valueOf(row.get(4)), Boolean.parseBoolean(row.get(5)), Boolean.parseBoolean(row.get(6))));
+                    role, userType, organizationId,
+                    Boolean.parseBoolean(row.get(5)), Boolean.parseBoolean(row.get(6))));
         }
         return result;
     }
 
     public synchronized void saveAccounts(List<Account> accounts) {
         List<List<String>> rows = new ArrayList<>();
-        rows.add(List.of("id", "name", "email", "passwordHash", "role", "universityVerified", "active"));
+        rows.add(List.of("id", "name", "email", "passwordHash", "role", "universityVerified", "active",
+                "userType", "organizationId"));
         for (Account a : accounts) rows.add(List.of(a.id(), a.name(), a.email(), a.passwordHash(),
-                a.role().name(), String.valueOf(a.universityVerified()), String.valueOf(a.active())));
+                a.role().name(), String.valueOf(a.universityVerified()), String.valueOf(a.active()),
+                a.userType() == null ? "" : a.userType().name(), a.organizationId()));
         write("accounts.csv", rows);
     }
 
@@ -70,11 +78,18 @@ public final class DatabaseManager {
 
     public synchronized List<Booking> loadBookings() {
         List<Booking> result = new ArrayList<>();
+        java.util.Map<String, java.math.BigDecimal> ratesByAccount = new java.util.HashMap<>();
+        for (Account account : loadAccounts()) {
+            if (account.userType() != null) ratesByAccount.put(account.id(), account.hourlyRate());
+        }
         for (List<String> row : read("bookings.csv")) {
             if (row.size() < 11 || row.get(0).equals("id")) continue;
+            java.math.BigDecimal legacyRate = ratesByAccount.getOrDefault(row.get(1), new java.math.BigDecimal("20.00"));
             result.add(new Booking(row.get(0), row.get(1), row.get(2), LocalDateTime.parse(row.get(3)),
                     LocalDateTime.parse(row.get(4)), Integer.parseInt(row.get(5)), BookingState.fromName(row.get(6)),
-                    Booking.DepositStatus.valueOf(row.get(7)), row.get(8), row.get(9)));
+                    Booking.DepositStatus.valueOf(row.get(7)), row.get(8), row.get(9),
+                    row.size() > 11 ? new java.math.BigDecimal(row.get(10)) : legacyRate,
+                    row.size() > 11 ? new java.math.BigDecimal(row.get(11)) : legacyRate));
         }
         return result;
     }
@@ -82,10 +97,11 @@ public final class DatabaseManager {
     public synchronized void saveBookings(List<Booking> bookings) {
         List<List<String>> rows = new ArrayList<>();
         rows.add(List.of("id", "accountId", "roomId", "start", "end", "attendees", "state",
-                "depositStatus", "paymentMethod", "transactionId", "version"));
+                "depositStatus", "paymentMethod", "transactionId", "hourlyRate", "depositAmount", "version"));
         for (Booking b : bookings) rows.add(List.of(b.id(), b.accountId(), b.roomId(), b.start().toString(),
                 b.end().toString(), String.valueOf(b.attendees()), b.state().name(), b.depositStatus().name(),
-                b.paymentMethod(), b.transactionId(), "1"));
+                b.paymentMethod(), b.transactionId(), b.hourlyRate().toPlainString(),
+                b.depositAmount().toPlainString(), "2"));
         write("bookings.csv", rows);
     }
 
@@ -151,4 +167,3 @@ public final class DatabaseManager {
         return fields;
     }
 }
-

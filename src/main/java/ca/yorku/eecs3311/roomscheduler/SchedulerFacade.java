@@ -8,6 +8,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.security.SecureRandom;
 
 /** Facade pattern: the GUI uses this single API for all application use cases. */
 public final class SchedulerFacade {
@@ -38,12 +39,15 @@ public final class SchedulerFacade {
     private void seedDemoData() {
         if (accounts.isEmpty()) {
             accounts.add(AccountFactory.forRole(Role.CHIEF_EVENT_COORDINATOR)
-                    .createAccount("Chief Coordinator", "chief@yorku.ca", "chief123", true));
+                    .createAccount("Chief Coordinator", "chief@yorku.ca", "Chief123!", true));
             accounts.add(AccountFactory.forRole(Role.ADMIN)
-                    .createAccount("Room Administrator", "admin@yorku.ca", "admin123", true));
+                    .createAccount("Room Administrator", "admin@yorku.ca", "Admin123!", true));
             accounts.add(AccountFactory.forRole(Role.REGISTERED_USER)
-                    .createAccount("Demo Student", "student@yorku.ca", "student123", true));
+                    .createAccount("Demo Student", "student@yorku.ca", "Student123!",
+                            UserType.STUDENT, "218882191", true));
             database.saveAccounts(accounts);
+        } else {
+            migrateLegacyDemoPasswords();
         }
         if (rooms.isEmpty()) {
             rooms.add(new Room("LAS-1001", "Lassonde Boardroom", "Lassonde Building", 12, Room.Status.AVAILABLE));
@@ -53,22 +57,52 @@ public final class SchedulerFacade {
         }
     }
 
-    public synchronized Account register(String name, String email, String password, boolean universityAccount) {
-        validateEmail(email);
-        if (findAccountByEmail(email) != null) throw new IllegalArgumentException("An account already uses this email.");
-        boolean verified = false;
-        if (universityAccount) {
-            if (!email.toLowerCase(Locale.ROOT).endsWith("@yorku.ca"))
-                throw new IllegalArgumentException("University verification requires a @yorku.ca address.");
-            verified = true; // simulated university verification service
+    private void migrateLegacyDemoPasswords() {
+        boolean changed = false;
+        for (Account account : accounts) {
+            if (account.email().equals("student@yorku.ca") && account.passwordMatches("student123")) {
+                account.setPassword("Student123!");
+                changed = true;
+            } else if (account.email().equals("admin@yorku.ca") && account.passwordMatches("admin123")) {
+                account.setPassword("Admin123!");
+                changed = true;
+            } else if (account.email().equals("chief@yorku.ca") && account.passwordMatches("chief123")) {
+                account.setPassword("Chief123!");
+                changed = true;
+            }
         }
+        if (changed) {
+            try {
+                database.saveAccounts(accounts);
+            } catch (IllegalStateException lockedLegacyFile) {
+                // The upgraded credentials still work for this session. A later restart will
+                // persist them once accounts.csv is no longer open in Excel or another editor.
+            }
+        }
+    }
+
+    public synchronized Account register(String name, String email, String password,
+                                         UserType userType, String organizationId) {
+        validateEmail(email);
+        if (userType == null) throw new IllegalArgumentException("Select an account type.");
+        validateOrganizationId(userType, organizationId);
+        if (findAccountByEmail(email) != null) throw new IllegalArgumentException("An account already uses this email.");
+        boolean yorkEmail = email.toLowerCase(Locale.ROOT).endsWith("@yorku.ca");
+        if (userType.universityType() && !yorkEmail)
+            throw new IllegalArgumentException(userType.displayName() + " accounts require a verified @yorku.ca email.");
+        boolean verified = yorkEmail; // simulated university verification service
         Account account = AccountFactory.forRole(Role.REGISTERED_USER)
-                .createAccount(name, email, password, verified);
+                .createAccount(name, email, password, userType, organizationId, verified);
         accounts.add(account);
         database.saveAccounts(accounts);
         recordNotification(account.id(), verified ? "Account created and York University identity verified."
-                : "General account created.");
+                : "External partner account created.");
         return account;
+    }
+
+    public synchronized Account register(String name, String email, String password, boolean universityAccount) {
+        return register(name, email, password, universityAccount ? UserType.STUDENT : UserType.PARTNER,
+                universityAccount ? "000000000" : "PARTNER-DEFAULT");
     }
 
     public synchronized Account authenticate(String email, String password) {
@@ -88,6 +122,20 @@ public final class SchedulerFacade {
         database.saveAccounts(accounts);
         recordNotification(admin.id(), "Administrator credentials created by " + actor.name() + ".");
         return admin;
+    }
+
+    public synchronized GeneratedAdminCredentials generateAdministrator(Account actor, String name) {
+        requireRole(actor, Role.CHIEF_EVENT_COORDINATOR);
+        if (name == null || name.isBlank()) throw new IllegalArgumentException("Administrator name is required.");
+        String token = UUID.randomUUID().toString().substring(0, 8);
+        String email = "admin." + token + "@yorku.ca";
+        String password = "Adm!" + token.substring(0, 4).toUpperCase(Locale.ROOT)
+                + new SecureRandom().nextInt(1000, 9999);
+        Account admin = AccountFactory.forRole(Role.ADMIN).createAccount(name, email, password, true);
+        accounts.add(admin);
+        database.saveAccounts(accounts);
+        recordNotification(admin.id(), "Administrator credentials auto-generated by " + actor.name() + ".");
+        return new GeneratedAdminCredentials(admin, password);
     }
 
     public synchronized void setAdministratorActive(Account actor, String adminId, boolean active) {
@@ -148,16 +196,20 @@ public final class SchedulerFacade {
     public synchronized Booking bookRoom(Account user, String roomId, LocalDateTime start,
                                          LocalDateTime end, int attendees, String paymentMethod,
                                          String paymentDetails) {
-        requireLoggedIn(user);
+        requireRole(user, Role.REGISTERED_USER);
         validateFutureTimes(start, end);
         Room room = requireRoom(roomId);
         if (room.status() != Room.Status.AVAILABLE) throw new IllegalStateException("Room is not bookable.");
         if (attendees > room.capacity()) throw new IllegalArgumentException("Attendees exceed room capacity.");
         if (!isAvailable(roomId, start, end, null)) throw new IllegalStateException("Room is no longer available.");
-        PaymentReceipt receipt = PaymentStrategy.forMethod(paymentMethod).pay(Booking.DEPOSIT, paymentDetails);
+        if (paymentMethod.equalsIgnoreCase("Institutional Billing")
+                && !user.organizationId().equalsIgnoreCase(paymentDetails == null ? "" : paymentDetails.trim()))
+            throw new IllegalArgumentException("Institutional billing ID must match the account's organization ID.");
+        BigDecimal oneHourDeposit = user.hourlyRate();
+        PaymentReceipt receipt = PaymentStrategy.forMethod(paymentMethod).pay(oneHourDeposit, paymentDetails);
         Booking booking = new Booking(UUID.randomUUID().toString(), user.id(), roomId, start, end,
                 attendees, BookingState.fromName("PENDING"), Booking.DepositStatus.PAID,
-                receipt.method(), receipt.transactionId());
+                receipt.method(), receipt.transactionId(), user.hourlyRate(), oneHourDeposit);
         attachObservers(booking);
         bookings.add(booking);
         booking.confirm();
@@ -169,13 +221,27 @@ public final class SchedulerFacade {
                                          LocalDateTime start, LocalDateTime end, int attendees) {
         Booking booking = authorizedBooking(actor, bookingId);
         if (!LocalDateTime.now().isBefore(booking.start()))
-            throw new IllegalStateException("A booking can only be edited before its start time.");
+            throw new IllegalStateException("After the start time, use the extension action instead of editing.");
         validateFutureTimes(start, end);
         Room room = requireRoom(roomId);
         if (room.status() != Room.Status.AVAILABLE || attendees > room.capacity())
             throw new IllegalArgumentException("The selected room cannot hold this booking.");
         if (!isAvailable(roomId, start, end, bookingId)) throw new IllegalStateException("Room is unavailable at that time.");
         booking.reschedule(roomId, start, end, attendees);
+        database.saveBookings(bookings);
+    }
+
+    public synchronized void extendBooking(Account actor, String bookingId, LocalDateTime newEnd) {
+        Booking booking = authorizedBooking(actor, bookingId);
+        if (!LocalDateTime.now().isBefore(booking.end()))
+            throw new IllegalStateException("This booking has already expired.");
+        if (newEnd == null || !newEnd.isAfter(booking.end()))
+            throw new IllegalArgumentException("The new expiry must be later than the current end time.");
+        if (Duration.between(booking.start(), newEnd).compareTo(Duration.ofHours(12)) > 0)
+            throw new IllegalArgumentException("A booking cannot exceed 12 hours.");
+        if (!isAvailable(booking.roomId(), booking.end(), newEnd, booking.id()))
+            throw new IllegalStateException("The room is unavailable during the requested extension.");
+        booking.extendTo(newEnd);
         database.saveBookings(bookings);
     }
 
@@ -271,7 +337,7 @@ public final class SchedulerFacade {
     private static void validateFutureTimes(LocalDateTime start, LocalDateTime end) {
         if (start == null || end == null || !end.isAfter(start))
             throw new IllegalArgumentException("End time must be after start time.");
-        if (Duration.between(start, end).toHours() > 12)
+        if (Duration.between(start, end).compareTo(Duration.ofHours(12)) > 0)
             throw new IllegalArgumentException("A booking cannot exceed 12 hours.");
         if (start.isBefore(LocalDateTime.now().minusMinutes(1)))
             throw new IllegalArgumentException("A booking must start in the future.");
@@ -296,6 +362,16 @@ public final class SchedulerFacade {
             throw new IllegalArgumentException("Enter a valid email address.");
     }
 
+    private static void validateOrganizationId(UserType userType, String organizationId) {
+        String value = organizationId == null ? "" : organizationId.trim();
+        if (userType == UserType.STUDENT) {
+            if (!value.matches("\\d{9}"))
+                throw new IllegalArgumentException("Student number must contain exactly 9 digits.");
+        } else if (!value.matches("[A-Za-z0-9-]{6,20}")) {
+            throw new IllegalArgumentException("Organization ID must contain 6–20 letters, numbers, or hyphens.");
+        }
+    }
+
     private Account findAccountByEmail(String email) {
         if (email == null) return null;
         return accounts.stream().filter(a -> a.email().equalsIgnoreCase(email.trim())).findFirst().orElse(null);
@@ -308,3 +384,5 @@ public final class SchedulerFacade {
     private static void requireRole(Account account, Role role) { requireLoggedIn(account); if (account.role() != role) throw new SecurityException(role.displayName() + " permission required."); }
     private static void requireAdmin(Account account) { requireLoggedIn(account); if (account.role() == Role.REGISTERED_USER) throw new SecurityException("Administrator permission required."); }
 }
+
+record GeneratedAdminCredentials(Account account, String temporaryPassword) {}

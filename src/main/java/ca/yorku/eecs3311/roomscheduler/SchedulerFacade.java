@@ -255,6 +255,10 @@ public final class SchedulerFacade {
 
     public synchronized void checkIn(Account actor, String bookingId, LocalDateTime scannedAt) {
         Booking booking = authorizedBooking(actor, bookingId);
+         if (booking.state().name().equals("CANCELLED")) {
+        throw new IllegalStateException("Cannot check in to a cancelled booking.");
+    }
+
         if (scannedAt.isBefore(booking.start().minusMinutes(30)))
             throw new IllegalStateException("Check-in opens 30 minutes before the booking.");
         if (scannedAt.isAfter(booking.start().plusMinutes(30))) {

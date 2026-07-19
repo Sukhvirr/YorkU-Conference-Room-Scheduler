@@ -305,12 +305,14 @@ public final class MainFrame extends JFrame {
         List<Room> rows = new ArrayList<>();
         Runnable refresh = () -> { rows.clear(); rows.addAll(scheduler.rooms()); model.setRowCount(0);
             for (Room r : rows) model.addRow(new Object[]{r.id(), r.name(), r.location(), r.capacity(), r.status(), r.sensor().occupied()}); };
+        JButton refreshButton = new JButton("Refresh");
         JButton add = new JButton("Add room"); JButton update = new JButton("Update selected");
         JButton available = new JButton("Enable"); JButton disable = new JButton("Disable");
         JButton maintenance = new JButton("Close for maintenance"); JButton schedule = new JButton("View schedule");
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        for (JButton b : List.of(add, update, available, disable, maintenance, schedule)) actions.add(b);
+        for (JButton b : List.of(refreshButton, add, update, available, disable, maintenance, schedule)) actions.add(b);
         panel.add(actions, BorderLayout.SOUTH);
+        refreshButton.addActionListener(e -> refresh.run());
         add.addActionListener(e -> roomDialog(null, refresh));
         update.addActionListener(e -> withSelected(table, rows, r -> roomDialog(r, refresh)));
         available.addActionListener(e -> changeRoomStatus(table, rows, Room.Status.AVAILABLE, refresh));
